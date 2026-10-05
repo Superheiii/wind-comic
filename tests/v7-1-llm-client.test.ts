@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildLLMAttempts, stripThink, isTransientLLMError } from '@/lib/llm-client';
+import { buildLLMAttempts, extractLLMResponseText, stripThink, isTransientLLMError } from '@/lib/llm-client';
 
 /** 一份"齐全"的假配置: 主网关 + DeepSeek 创意 + MiniMax 兜底 三者都在 */
 const FULL_CFG = {
@@ -196,6 +196,32 @@ describe('stripThink', () => {
     expect(stripThink('')).toBe('');
     expect(stripThink(undefined as any)).toBe('');
     expect(stripThink(null as any)).toBe('');
+  });
+});
+
+describe('extractLLMResponseText', () => {
+  it('prefers the normal OpenAI-compatible message.content field', () => {
+    expect(extractLLMResponseText({
+      choices: [{ message: { content: 'final prompt', reasoning_content: 'internal reasoning' }, finish_reason: 'stop' }],
+    })).toMatchObject({
+      content: 'final prompt', source: 'content', hasChoices: true, hasContent: true,
+      hasReasoningContent: true, finishReason: 'stop',
+    });
+  });
+
+  it('uses DeepSeek reasoning_content when content is empty', () => {
+    expect(extractLLMResponseText({
+      choices: [{ message: { content: '', reasoning_content: 'optimized master prompt' }, finish_reason: 'stop' }],
+    })).toMatchObject({
+      content: 'optimized master prompt', source: 'reasoning_content', hasChoices: true,
+      hasContent: false, hasReasoningContent: true, finishReason: 'stop',
+    });
+  });
+
+  it('reports an empty successful response without turning its HTTP status into text', () => {
+    expect(extractLLMResponseText({ choices: [{ message: { content: '' }, finish_reason: 'length' }] })).toMatchObject({
+      content: '', hasChoices: true, hasContent: false, hasReasoningContent: false, finishReason: 'length',
+    });
   });
 });
 

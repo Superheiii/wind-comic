@@ -55,6 +55,59 @@ export function stripThink(s: string): string {
   return (s || '').replace(/<think>[\s\S]*?<\/think>\s*/gi, '').trim();
 }
 
+type LLMResponseText = {
+  content: string;
+  source?: 'content' | 'reasoning_content';
+  hasChoices: boolean;
+  hasContent: boolean;
+  hasReasoningContent: boolean;
+  finishReason?: string;
+};
+
+function contentToText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+
+  // Some OpenAI-compatible gateways use multimodal content parts even for text.
+  return value.map((part) => {
+    if (typeof part === 'string') return part;
+    if (!part || typeof part !== 'object') return '';
+    const text = (part as { text?: unknown }).text;
+    return typeof text === 'string' ? text : '';
+  }).join('');
+}
+
+/**
+ * Extract generated text from OpenAI-compatible chat responses.
+ *
+ * DeepSeek reasoning models may put the only text in `reasoning_content`.
+ * Prefer `content` whenever it exists, so normal and non-reasoning models keep
+ * their existing behaviour.
+ */
+export function extractLLMResponseText(payload: unknown): LLMResponseText {
+  const response = payload && typeof payload === 'object' ? payload as { choices?: unknown } : {};
+  const choices = Array.isArray(response.choices) ? response.choices : [];
+  const first = choices[0] && typeof choices[0] === 'object'
+    ? choices[0] as { message?: unknown; finish_reason?: unknown }
+    : {};
+  const message = first.message && typeof first.message === 'object'
+    ? first.message as { content?: unknown; reasoning_content?: unknown }
+    : {};
+  const rawContent = contentToText(message.content);
+  const rawReasoning = contentToText(message.reasoning_content);
+  const content = stripThink(rawContent);
+  const reasoningContent = stripThink(rawReasoning);
+  const diagnostics = {
+    hasChoices: choices.length > 0,
+    hasContent: !!rawContent,
+    hasReasoningContent: !!rawReasoning,
+    finishReason: typeof first.finish_reason === 'string' ? first.finish_reason : undefined,
+  };
+
+  if (content) return { content, source: 'content', ...diagnostics };
+  return { content: reasoningContent, source: reasoningContent ? 'reasoning_content' : undefined, ...diagnostics };
+}
+
 /**
  * 判断是否"瞬时可重试"错误 (上游过载/限流/5xx) —— 这类错误退避后重试同一端点往往即恢复,
  * 比立刻切到慢速兜底 (MiniMax 推理模型 40-75s) 体验好得多。
@@ -129,18 +182,30 @@ export async function callLLMWithFallback(opts: LLMCallOpts): Promise<LLMCallRes
         });
         clearTimeout(tm);
         const j = await r.json().catch(() => null);
-        const content = stripThink(j?.choices?.[0]?.message?.content || '');
-        if (r.ok && content) {
-          return { ok: true, content, model: a.model, usedFallback: i > 0, attemptsTried: tried };
+        const responseText = extractLLMResponseText(j);
+        if (r.ok && responseText.content) {
+          return { ok: true, content: responseText.content, model: a.model, usedFallback: i > 0, attemptsTried: tried };
         }
-        lastErr = j?.error?.message || `LLM ${r.status}`;
+        const apiError = j && typeof j === 'object' && typeof (j as { error?: { message?: unknown } }).error?.message === 'string'
+          ? (j as { error: { message: string } }).error.message
+          : '';
+        lastErr = apiError || (r.ok ? 'LLM response contained no text content' : `LLM ${r.status}`);
         // v12.127:403/402 + 配额文案 → 标记该网关破产(同 host 后续尝试整段跳过)
+        console.warn(
+          `[llm-client] ${tag} response diagnostics: status=${r.status} model=${a.model} ` +
+          `message=${lastErr} hasChoices=${responseText.hasChoices} hasContent=${responseText.hasContent} ` +
+          `hasReasoningContent=${responseText.hasReasoningContent} finishReason=${responseText.finishReason || 'none'}`,
+        );
         if (r.status === 402 || r.status === 403 || isOutOfCreditsError(lastErr)) markGatewayOutOfCredits(a.baseURL);
-        console.warn(`[llm-client] ${tag} 失败: ${lastErr}`);
       } catch (e: any) {
         clearTimeout(tm);
         lastErr = e?.name === 'AbortError' ? 'timeout' : (e?.message || String(e));
-        console.warn(`[llm-client] ${tag} 异常: ${lastErr}`);
+        const causeMessage = typeof e?.cause?.message === 'string' ? e.cause.message : 'none';
+        const causeCode = typeof e?.cause?.code === 'string' ? e.cause.code : 'none';
+        console.warn(
+          `[llm-client] ${tag} exception diagnostics: model=${a.model} name=${e?.name || 'Error'} ` +
+          `message=${lastErr} cause=${causeMessage} causeCode=${causeCode}`,
+        );
       }
       // v12.120:瞬时错误/超时进健康缓存,同进程后续调用冷却期内跳过该端点
       if (isTransientLLMError(lastErr) || lastErr === 'timeout') markLLMDown(llmKey(a));
