@@ -83,6 +83,7 @@ type ImageProviderCatalogItem = {
   status: string;
   models: string[];
   capabilities: { referenceImages?: boolean; maxReferenceImages?: number };
+  healthCheck?: boolean;
 };
 
 // v12.5.0(#4):SSE 里程碑事件 → 全局指示条阶段中文名
@@ -109,6 +110,8 @@ export default function DashboardCreatePage() {
   const [imageProvider, setImageProvider] = useState('');
   const [imageModel, setImageModel] = useState('');
   const [imageProviders, setImageProviders] = useState<ImageProviderCatalogItem[]>([]);
+  const [imageProviderCheck, setImageProviderCheck] = useState<string | null>(null);
+  const [checkingImageProvider, setCheckingImageProvider] = useState(false);
   const [style, setStyle] = useState(stylePresets[0].en);
   const [selectedTemplate, setSelectedTemplate] = useState<StoryTemplate | null>(null);
   // v2.18 P1: 模板展开 / 详情逻辑 已迁移到 <TemplateLibraryPicker> 内, 老 expandedTemplate 状态废弃
@@ -130,6 +133,21 @@ export default function DashboardCreatePage() {
       .catch(() => {});
     return () => { live = false; };
   }, []);
+
+  /** 连接检测只调用服务端的安全状态接口，前端绝不接触图片模型密钥。 */
+  const checkImageProvider = async (providerId: string) => {
+    setCheckingImageProvider(true);
+    setImageProviderCheck(null);
+    try {
+      const response = await fetch(`/api/image-providers?check=${encodeURIComponent(providerId)}`);
+      const body = await response.json();
+      setImageProviderCheck(body?.provider?.message || body?.error || '连接检测未返回结果。');
+    } catch {
+      setImageProviderCheck('连接检测请求失败，请稍后重试。');
+    } finally {
+      setCheckingImageProvider(false);
+    }
+  };
 
   // Vidu-style: pre-fill idea from URL query param (from cases page "用这个创作")
   useEffect(() => {
@@ -1137,6 +1155,7 @@ export default function DashboardCreatePage() {
                   onClick={() => {
                     setImageProvider(provider.id);
                     setImageModel(provider.models[0] || '');
+                    setImageProviderCheck(null);
                   }}
                   className={`cinema-card-hi p-2 text-left transition-all ${imageProvider === provider.id ? 'border-[var(--cinema-amber)]' : ''} ${provider.configured ? 'hover:border-[var(--cinema-border-hi)]' : 'opacity-45 cursor-not-allowed'}`}
                 >
@@ -1159,6 +1178,23 @@ export default function DashboardCreatePage() {
                 ))}
               </select>
             )}
+            {(() => {
+              const selectedProvider = imageProviders.find((provider) => provider.id === imageProvider);
+              if (!selectedProvider?.configured || !selectedProvider.healthCheck) return null;
+              return (
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => checkImageProvider(selectedProvider.id)}
+                    disabled={checkingImageProvider}
+                    className="cinema-btn !px-2 !py-1 !text-[10px] disabled:opacity-50"
+                  >
+                    {checkingImageProvider ? '检测中…' : `检测 ${selectedProvider.name} 连接`}
+                  </button>
+                  {imageProviderCheck && <span className="cinema-mono text-[10px] opacity-70">{imageProviderCheck}</span>}
+                </div>
+              );
+            })()}
             {!imageProviders.some((provider) => provider.configured) && (
               <p className="cinema-mono text-[10px] text-[var(--cinema-amber)] mt-2">尚未配置可用的图片模型，请前往设置 → 图片模型。</p>
             )}

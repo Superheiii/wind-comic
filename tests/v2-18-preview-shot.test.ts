@@ -213,6 +213,7 @@ describe('/api/preview-shot happy path', () => {
     const POST = await importPost();
     const res = await POST(mkReq({ idea: '一个唐朝长安少年剑客复仇的故事' }));
     expect(res.status).toBe(422);
+    expect(LAST_H3_IMAGE_URL).toBeNull();
   });
 
   it('aspect 9:16 carries through to prompt', async () => {

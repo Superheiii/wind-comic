@@ -45,9 +45,8 @@ export const imageProviderRegistry = {
   status(providerId: string): ImageProviderStatus {
     const provider = this.get(providerId);
     if (!provider) return 'unavailable';
-    // Qwen/Seedream 没有经过验证的请求契约时绝不猜测 endpoint。
-    // 因此检测到密钥只表示“发现配置，等待 API 接入”，不能误报为可付费生成。
-    if ((providerId === 'qwen' || providerId === 'seedream') && provider.isConfigured()) return 'pending';
+    // Seedream 尚未接入已验证的请求契约，检测到密钥也只能显示为待接入。
+    if (providerId === 'seedream' && provider.isConfigured()) return 'pending';
     return provider.isConfigured() ? 'configured' : 'not_configured';
   },
 };

@@ -2,6 +2,7 @@ import { API_CONFIG } from '@/lib/config';
 import { ComfyUIService, hasComfyUI } from '@/services/comfyui.service';
 import { MidjourneyService, hasMidjourney } from '@/services/midjourney.service';
 import { ImageProviderError } from './errors';
+import { QwenImageProvider } from './qwen-image-provider';
 import { imageProviderRegistry } from './registry';
 import type { ImageGenerateRequest, ImageGenerationResult, ImageProviderCapabilities, UnifiedImageProvider } from './types';
 
@@ -34,9 +35,8 @@ function pendingProvider(id: 'qwen' | 'seedream', name: string, keyPresent: () =
   };
 }
 
-imageProviderRegistry.register(pendingProvider(
-  'qwen', 'Qwen-Image', () => Boolean(API_CONFIG.image.qwen.apiKey), () => API_CONFIG.image.qwen.model,
-));
+// Qwen 使用已核对的百炼同步接口；适配器负责屏蔽上游响应结构。
+imageProviderRegistry.register(new QwenImageProvider());
 imageProviderRegistry.register(pendingProvider(
   'seedream', 'Seedream', () => Boolean(API_CONFIG.image.seedream.apiKey), () => API_CONFIG.image.seedream.model,
 ));

@@ -121,8 +121,10 @@ export const API_CONFIG = {
     get defaultModel() { return process.env.IMAGE_MODEL || ''; },
     qwen: {
       get apiKey() { return process.env.QWEN_IMAGE_API_KEY || ''; },
-      get baseURL() { return process.env.QWEN_IMAGE_BASE_URL || ''; },
-      get model() { return process.env.QWEN_IMAGE_MODEL || 'qwen-image'; },
+      // 百炼 DashScope 北京地域的通用域名；其他地域或业务空间专属域名可通过环境变量覆盖。
+      get baseURL() { return process.env.QWEN_IMAGE_BASE_URL || 'https://dashscope.aliyuncs.com'; },
+      // 业务层只从配置读取模型，避免把具体 Qwen 版本散落到调用链中。
+      get model() { return process.env.QWEN_IMAGE_MODEL || 'qwen-image-2.0'; },
     },
     seedream: {
       get apiKey() { return process.env.SEEDREAM_API_KEY || ''; },
