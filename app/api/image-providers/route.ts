@@ -25,6 +25,10 @@ export async function GET(request: NextRequest) {
         configured: provider.isConfigured(),
         status: health.status,
         message: health.message,
+        // 仅透传安全诊断字段，绝不返回 API Key、Authorization 或上游完整响应。
+        model: health.model,
+        httpStatus: health.httpStatus,
+        requestId: health.requestId,
       },
     });
   }

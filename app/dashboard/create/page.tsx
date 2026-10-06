@@ -152,7 +152,14 @@ export default function DashboardCreatePage() {
     try {
       const response = await fetch(`/api/image-providers?check=${encodeURIComponent(providerId)}`);
       const body = await response.json();
-      setImageProviderCheck(body?.provider?.message || body?.error || '连接检测未返回结果。');
+      const check = body?.provider;
+      const diagnostics = [
+        check?.httpStatus ? `HTTP ${check.httpStatus}` : '',
+        check?.id ? `provider=${check.id}` : '',
+        check?.model ? `model=${check.model}` : '',
+        check?.requestId ? `request_id=${check.requestId}` : '',
+      ].filter(Boolean).join(' · ');
+      setImageProviderCheck([check?.message || body?.error || '连接检测未返回结果。', diagnostics].filter(Boolean).join(' '));
     } catch {
       setImageProviderCheck('连接检测请求失败，请稍后重试。');
     } finally {

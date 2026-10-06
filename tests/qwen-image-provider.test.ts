@@ -163,13 +163,66 @@ describe('QwenImageProvider', () => {
 
   it('uses the zero-cost models endpoint for the connection health check', async () => {
     configureQwen();
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ output: { total: 1 } }), { status: 200 }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      request_id: 'health-req-001',
+      output: { total: 1, models: [{ model: 'qwen-image-3.0' }] },
+    }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(new QwenImageProvider().healthCheck()).resolves.toEqual({
-      status: 'configured', message: 'Qwen 图片服务连接正常。',
+      status: 'configured',
+      message: 'Qwen 图片服务连接正常（HTTP 200，模型已授权）。',
+      provider: 'qwen',
+      model: 'qwen-image-3.0',
+      httpStatus: 200,
+      requestId: 'health-req-001',
     });
-    expect(fetchMock.mock.calls[0][0]).toBe('https://dashscope.aliyuncs.com/api/v1/models?model=qwen-image-3.0&page_no=1&page_size=1');
+    expect(fetchMock.mock.calls[0][0]).toBe('https://dashscope.aliyuncs.com/api/v1/models?model=qwen-image-3.0');
+  });
+
+  it('reports the exact HTTP diagnosis without issuing a paid generation request', async () => {
+    configureQwen();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ request_id: 'health-req-401' }), { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(new QwenImageProvider().healthCheck()).resolves.toMatchObject({
+      status: 'unavailable',
+      httpStatus: 401,
+      requestId: 'health-req-401',
+      message: 'Qwen API Key 无效，或 API Key 与 Region / Workspace 不匹配。',
+    });
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/v1/models?model=qwen-image-3.0');
+    expect(fetchMock.mock.calls[0][1].method).toBeUndefined();
+  });
+
+  it.each([
+    [403, '当前 API Key 没有对应 Workspace 或 Qwen-Image 模型权限。'],
+    [404, 'Qwen 图片服务地址或 API 路径错误。'],
+    [429, 'Qwen 图片服务当前限流，请稍后重试。'],
+    [503, 'Qwen 图片服务异常，请稍后重试。'],
+  ])('classifies health-check HTTP %i without calling image generation', async (status, message) => {
+    configureQwen();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ request_id: `health-${status}` }), { status })));
+
+    await expect(new QwenImageProvider().healthCheck()).resolves.toMatchObject({
+      status: 'unavailable',
+      httpStatus: status,
+      message,
+    });
+  });
+
+  it('requires the queried Qwen model to be present in the free model-list response', async () => {
+    configureQwen();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      request_id: 'health-req-missing-model',
+      output: { models: [] },
+    }), { status: 200 })));
+
+    await expect(new QwenImageProvider().healthCheck()).resolves.toMatchObject({
+      status: 'unavailable',
+      httpStatus: 200,
+      message: expect.stringContaining('不在当前 Workspace 的可用模型列表中'),
+    });
   });
 
   it('lists all supported Qwen models with 3.0 as the default recommendation', () => {

@@ -11,8 +11,8 @@ import type {
   UnifiedImageProvider,
 } from './types';
 
-const QWEN_GENERATION_PATH = '/api/v1/services/aigc/multimodal-generation/generation';
-const QWEN_MODELS_PATH = '/api/v1/models';
+const QWEN_GENERATION_PATH = '/services/aigc/multimodal-generation/generation';
+const QWEN_MODELS_PATH = '/models';
 const GENERATION_TIMEOUT_MS = 90_000;
 const HEALTH_CHECK_TIMEOUT_MS = 10_000;
 
@@ -54,6 +54,7 @@ type QwenResponse = {
   message?: string;
   output?: {
     rewrite_status?: string;
+    models?: Array<{ model?: string }>;
     choices?: Array<{
       finish_reason?: string;
       message?: {
@@ -76,9 +77,18 @@ function currentConfig(): QwenConfig {
   return API_CONFIG.image.qwen;
 }
 
-/** DashScope Base URL 由配置统一管理，Provider 只补官方 API 路径。 */
+/**
+ * DashScope 原生 API 基址必须以 /api/v1 结束。
+ * 兼容用户填写域名根路径或完整原生 API 基址，避免意外拼出 /api/v1/api/v1。
+ */
+function qwenApiBaseURL(baseURL: string): string {
+  const normalized = normalizeBaseURL(baseURL);
+  return /\/api\/v1$/i.test(normalized) ? normalized : `${normalized}/api/v1`;
+}
+
+/** Provider 只在已归一化的原生 API 基址后拼官方资源路径。 */
 function endpoint(baseURL: string, path: string): string {
-  return `${normalizeBaseURL(baseURL)}${path}`;
+  return `${qwenApiBaseURL(baseURL)}${path}`;
 }
 
 function isHttpUrl(value: unknown): value is string {
@@ -145,6 +155,26 @@ function extractImages(body: QwenResponse, request: ImageGenerateRequest): Image
       ? { requestId: body.request_id, rewriteStatus: body.output?.rewrite_status }
       : undefined,
   }));
+}
+
+/** 上游优先使用响应体 request_id；仅在缺失时读取安全的请求追踪响应头。 */
+function responseRequestId(response: Response, body: QwenResponse | undefined): string | undefined {
+  return body?.request_id || response.headers.get('x-request-id') || response.headers.get('x-dashscope-request-id') || undefined;
+}
+
+/** 模型查询是精确筛选，200 仍需确认目标模型确实在当前业务空间可用。 */
+function hasModel(body: QwenResponse | undefined, model: string): boolean {
+  return body?.output?.models?.some((item) => item.model === model) === true;
+}
+
+/** 健康检测的状态文案按 HTTP 状态细分，避免把配置问题伪装成生成失败。 */
+function healthFailureMessage(status: number): string {
+  if (status === 401) return 'Qwen API Key 无效，或 API Key 与 Region / Workspace 不匹配。';
+  if (status === 403) return '当前 API Key 没有对应 Workspace 或 Qwen-Image 模型权限。';
+  if (status === 404) return 'Qwen 图片服务地址或 API 路径错误。';
+  if (status === 429) return 'Qwen 图片服务当前限流，请稍后重试。';
+  if (status >= 500) return 'Qwen 图片服务异常，请稍后重试。';
+  return `Qwen 模型查询失败（HTTP ${status}）。`;
 }
 
 /** 合并统一请求中的参考图字段，并保留调用方给出的顺序。 */
@@ -303,41 +333,50 @@ export class QwenImageProvider implements UnifiedImageProvider {
    */
   async healthCheck(): Promise<ProviderHealthResult> {
     const config = currentConfig();
-    if (!config.apiKey.trim()) return { status: 'not_configured', message: 'Qwen 图片服务未配置 API Key。' };
-    if (!config.baseURL.trim()) return { status: 'not_configured', message: 'Qwen 图片服务地址未配置。' };
+    const diagnostics = { provider: this.id, model: config.model };
+    if (!config.apiKey.trim()) return { status: 'not_configured', message: 'Qwen 图片服务未配置 API Key。', ...diagnostics };
+    if (!config.baseURL.trim()) return { status: 'not_configured', message: 'Qwen 图片服务地址未配置。', ...diagnostics };
 
     let healthUrl: string;
     try {
       const url = new URL(endpoint(config.baseURL, QWEN_MODELS_PATH));
       url.searchParams.set('model', config.model);
-      url.searchParams.set('page_no', '1');
-      url.searchParams.set('page_size', '1');
       healthUrl = url.toString();
     } catch {
-      return { status: 'unavailable', message: 'Qwen 图片服务地址格式无效。' };
+      return { status: 'unavailable', message: 'Qwen 图片服务地址格式无效。', ...diagnostics };
     }
 
     try {
       const response = await fetchWithTimeout(healthUrl, {
         headers: {
           Authorization: `Bearer ${config.apiKey}`,
-          'Content-Type': 'application/json',
         },
       }, HEALTH_CHECK_TIMEOUT_MS);
       const body = await readJson(response);
+      const requestId = responseRequestId(response, body);
       if (!response.ok || body?.code) {
-        const error = qwenError(response.status, body);
-        console.warn(`[qwen-image] health-check provider=qwen model=${config.model} status=${response.status} code=${body?.code || 'none'}`);
-        return { status: 'unavailable', message: error.message };
+        console.warn(`[qwen-image] health-check provider=qwen model=${config.model} status=${response.status} requestId=${requestId || 'none'} code=${body?.code || 'none'}`);
+        return { status: 'unavailable', message: healthFailureMessage(response.status), httpStatus: response.status, requestId, ...diagnostics };
       }
-      console.info(`[qwen-image] health-check provider=qwen model=${config.model} status=${response.status}`);
-      return { status: 'configured', message: 'Qwen 图片服务连接正常。' };
+      if (!hasModel(body, config.model)) {
+        console.warn(`[qwen-image] health-check missing-model provider=qwen model=${config.model} status=${response.status} requestId=${requestId || 'none'}`);
+        return {
+          status: 'unavailable',
+          message: `Qwen 图片服务已响应（HTTP ${response.status}），但模型 ${config.model} 不在当前 Workspace 的可用模型列表中。`,
+          httpStatus: response.status,
+          requestId,
+          ...diagnostics,
+        };
+      }
+      console.info(`[qwen-image] health-check provider=qwen model=${config.model} status=${response.status} requestId=${requestId || 'none'}`);
+      return { status: 'configured', message: `Qwen 图片服务连接正常（HTTP ${response.status}，模型已授权）。`, httpStatus: response.status, requestId, ...diagnostics };
     } catch (error) {
       const reason = error instanceof Error ? error.name : 'UnknownError';
       console.warn(`[qwen-image] health-check failed provider=qwen model=${config.model} error=${reason}`);
       return {
         status: 'unavailable',
-        message: error instanceof FetchTimeoutError ? 'Qwen 图片服务连接超时。' : '无法连接 Qwen 图片服务，请检查服务地址。',
+        message: error instanceof FetchTimeoutError ? 'Qwen 图片服务连接超时。' : '无法连接 Qwen 图片服务，请检查 DNS、TLS、代理或网络配置。',
+        ...diagnostics,
       };
     }
   }

@@ -107,6 +107,11 @@ export type ImageProviderStatus = 'configured' | 'not_configured' | 'pending' | 
 export interface ProviderHealthResult {
   status: ImageProviderStatus;
   message: string;
+  /** 仅用于前端安全诊断；不得放入密钥、请求头或上游原始响应。 */
+  provider?: string;
+  model?: string;
+  httpStatus?: number;
+  requestId?: string;
 }
 
 export interface UnifiedImageProvider {
