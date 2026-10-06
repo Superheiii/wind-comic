@@ -28,6 +28,8 @@ interface PreviewResult {
   style: string;
   aspect: string;
   videoProvider?: string;
+  imageProvider?: string;
+  imageModel?: string;
   elapsedMs: number;
   warnings?: string[];
   rateLimit?: RateLimit;
@@ -50,6 +52,8 @@ export interface PreviewShotModalProps {
   style: string;
   aspect: string;
   videoProvider?: string;
+  imageProvider?: string;
+  imageModel?: string;
   videoToo?: boolean;
   /**
    * 用户点 "用这个走全流程" → 父组件触发完整 ROLL
@@ -63,7 +67,7 @@ export interface PreviewShotModalProps {
 }
 
 export function PreviewShotModal({
-  idea, style, aspect, videoProvider, videoToo = true, onAccept, onCancel,
+  idea, style, aspect, videoProvider, imageProvider, imageModel, videoToo = true, onAccept, onCancel,
 }: PreviewShotModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -95,7 +99,7 @@ export function PreviewShotModal({
       const res = await fetch('/api/preview-shot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idea, style, aspect, videoProvider, videoToo: withVideo }),
+        body: JSON.stringify({ idea, style, aspect, videoProvider, imageProvider, imageModel, videoToo: withVideo }),
       });
       const body = await res.json();
       if (res.status === 429) {
@@ -133,7 +137,7 @@ export function PreviewShotModal({
     fetchPreview(tryWithVideo);
     refreshHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idea, style, aspect]);
+  }, [idea, style, aspect, imageProvider, imageModel]);
 
   // v10.3.6 a11y: Escape + 焦点陷阱 + 焦点归还(此前无任何键盘关闭路径)
   const dialogRef = useFocusTrap<HTMLDivElement>(true, onCancel);

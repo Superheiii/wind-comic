@@ -324,6 +324,7 @@ export class HybridOrchestrator {
   private happyhorseService: HappyHorseService | null; // v12.272
   private falFluxService: FalFluxService | null;
   private comfyuiService: ComfyUIService | null;
+  private imageSelection: { provider?: string; model?: string; quality?: 'draft' | 'standard' | 'high' } = {};
   public onProgress?: ProgressCallback;
 
   // Pipeline intervention gate support
@@ -519,6 +520,14 @@ export class HybridOrchestrator {
   }
 
   /** v12.14.0 横竖屏:项目比例 → 视频引擎支持的 '16:9'|'9:16'|'1:1'(其它就近归 16:9)。所有视频引擎调用都带它。 */
+  setImageSelection(selection: { provider?: string; model?: string; quality?: 'draft' | 'standard' | 'high' }) {
+    this.imageSelection = {
+      provider: selection.provider || undefined,
+      model: selection.model || undefined,
+      quality: selection.quality || 'standard',
+    };
+  }
+
   private videoAspect(): '16:9' | '9:16' | '1:1' {
     return normalizeVideoAspect(this.aspect);
   }
@@ -1087,6 +1096,34 @@ export class HybridOrchestrator {
     referenceImages?: string[];
     sketchUrl?: string; sketchLock?: boolean; sketchMeta?: { shotSize?: string; angle?: string; movement?: string }; // v12.135 镜头语言草图锁
   }): Promise<string> {
+    // Provider 无关的图片层：所有业务出图均在此解析 provider/model，
+    // 不再由业务逻辑直接依赖 Midjourney。
+    const { imageGenerationService } = await import('@/services/image-generation.service');
+    const generated = await imageGenerationService.generate({
+      prompt,
+      aspectRatio: opts?.aspectRatio,
+      provider: this.imageSelection.provider,
+      model: this.imageSelection.model,
+      quality: this.imageSelection.quality || 'standard',
+      referenceImages: opts?.referenceImages,
+      characterReferences: opts?.cref ? [opts.cref] : undefined,
+      styleReferences: opts?.sref ? [opts.sref] : undefined,
+      count: 1,
+      metadata: { label: opts?.label, source: 'hybrid-orchestrator' },
+    });
+    const providerImageUrl = generated.images[0]?.url;
+    if (!providerImageUrl) throw new Error('图片 Provider 未返回图片地址');
+    if (/^(https?:|data:|\/api\/serve-file)/.test(providerImageUrl) && process.env.MOCK_ENGINES !== '1') {
+      const imageCost = estimateImageCostCny();
+      const imageGate = this.taskBudget.request(imageCost, '分镜出图');
+      if (!imageGate.allowed) {
+        this.emit('agentTalk', { role: AgentRole.DIRECTOR, text: `⏸ ${imageGate.message}` });
+        throw new Error(`任务预算暂停:${imageGate.message}`);
+      }
+      void recordCostLog({ userId: this.userId, projectId: this.projectId, engine: `image:${generated.provider}/${generated.model}`, costCny: imageCost, metadata: { label: opts?.label } });
+    }
+    return providerImageUrl;
+
     // v3.2 P3.1: 通过 PLUGIN_CHAIN_MODE env 决定是否先试 plugin chain.
     // off (默认) → 直接走老主路径, 行为完全不变.
     // shadow     → 老主路径正常出结果, plugin 异步采样跑收集 telemetry.

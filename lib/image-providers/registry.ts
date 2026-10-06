@@ -12,10 +12,45 @@
  *   - 用户也可注册替换内置 (priority < 100), 让自定义 provider 优先
  */
 
-import type { ImageProvider, SelectInput, ImageGenerateInput, ImageGenerateResult } from './types';
+import type {
+  ImageProvider, SelectInput, ImageGenerateInput, ImageGenerateResult,
+  UnifiedImageProvider, ImageProviderStatus,
+} from './types';
 import { isProviderHealthy, markProviderDownIfFatal } from '../provider-health-cache';
 
 const providers = new Map<string, ImageProvider>();
+const unifiedProviders = new Map<string, UnifiedImageProvider>();
+
+/** 新图片业务使用的注册表；与旧的 fallback 链隔离，确保第三方旧插件继续兼容。 */
+export const imageProviderRegistry = {
+  register(provider: UnifiedImageProvider): void {
+    if (!provider.id || !provider.generate) throw new Error('image provider must have id + generate()');
+    unifiedProviders.set(provider.id, provider);
+  },
+  get(providerId: string): UnifiedImageProvider | undefined {
+    return unifiedProviders.get(providerId);
+  },
+  list(): UnifiedImageProvider[] {
+    return Array.from(unifiedProviders.values());
+  },
+  getAvailableProviders(): UnifiedImageProvider[] {
+    return this.list().filter((provider) => provider.isConfigured());
+  },
+  getModels(providerId: string): string[] {
+    return this.get(providerId)?.models() ?? [];
+  },
+  isConfigured(providerId: string): boolean {
+    return this.get(providerId)?.isConfigured() ?? false;
+  },
+  status(providerId: string): ImageProviderStatus {
+    const provider = this.get(providerId);
+    if (!provider) return 'unavailable';
+    // Qwen/Seedream 没有经过验证的请求契约时绝不猜测 endpoint。
+    // 因此检测到密钥只表示“发现配置，等待 API 接入”，不能误报为可付费生成。
+    if ((providerId === 'qwen' || providerId === 'seedream') && provider.isConfigured()) return 'pending';
+    return provider.isConfigured() ? 'configured' : 'not_configured';
+  },
+};
 
 /**
  * 注册一个 provider. 同 id 重复注册 = 覆盖 (允许 reload).

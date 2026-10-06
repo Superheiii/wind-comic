@@ -43,6 +43,84 @@
 
 export type AspectRatio = '16:9' | '9:16' | '1:1' | '2.35:1' | '4:3' | '3:4';
 
+/**
+ * Provider 无关的图片协议。新的业务代码统一使用这些类型；下方旧接口保留，
+ * 以便现有插件在逐步迁移期间继续兼容。
+ */
+export type ImageQuality = 'draft' | 'standard' | 'high';
+
+export interface ImageProviderCapabilities {
+  textToImage: boolean;
+  imageToImage: boolean;
+  imageEdit: boolean;
+  referenceImages: boolean;
+  multiReference: boolean;
+  characterReference: boolean;
+  styleReference: boolean;
+  controlNet: boolean;
+  lora: boolean;
+  supportsSeed: boolean;
+  supportsNegativePrompt: boolean;
+  supportedAspectRatios?: string[];
+  maxReferenceImages?: number;
+}
+
+export interface ImageGenerateRequest {
+  prompt: string;
+  negativePrompt?: string;
+  aspectRatio?: string;
+  width?: number;
+  height?: number;
+  referenceImages?: string[];
+  characterReferences?: string[];
+  styleReferences?: string[];
+  seed?: number;
+  quality?: ImageQuality;
+  count?: number;
+  provider?: string;
+  model?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ImageEditRequest extends ImageGenerateRequest {
+  imageUrl: string;
+  maskUrl?: string;
+}
+
+export interface ImageGenerationResult {
+  provider: string;
+  model: string;
+  images: Array<{
+    url: string;
+    width?: number;
+    height?: number;
+    seed?: number;
+    revisedPrompt?: string;
+    metadata?: Record<string, unknown>;
+  }>;
+  taskId?: string;
+  raw?: unknown;
+}
+
+export type ImageProviderStatus = 'configured' | 'not_configured' | 'pending' | 'unavailable';
+
+export interface ProviderHealthResult {
+  status: ImageProviderStatus;
+  message: string;
+}
+
+export interface UnifiedImageProvider {
+  id: string;
+  name: string;
+  /** 配置层提供的默认模型，不允许散落在业务代码中硬编码。 */
+  models: () => string[];
+  isConfigured: () => boolean;
+  generate: (request: ImageGenerateRequest) => Promise<ImageGenerationResult>;
+  edit?: (request: ImageEditRequest) => Promise<ImageGenerationResult>;
+  healthCheck?: () => Promise<ProviderHealthResult>;
+  getCapabilities: () => ImageProviderCapabilities;
+}
+
 export interface ImageGenerateInput {
   /** 主 prompt — 已经过 sanitize + neg prompts (由 orchestrator 处理) */
   prompt: string;

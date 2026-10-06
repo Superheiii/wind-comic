@@ -37,6 +37,9 @@ export interface CreatePipelineInput {
   /** 调用方预先确定(队列路径 enqueue 时就要把 id 告诉客户端) */
   projectId: string;
   videoProvider?: string;
+  imageProvider?: string;
+  imageModel?: string;
+  imageQuality?: 'draft' | 'standard' | 'high';
   style?: string;
   aspect?: string;
   enableGates?: boolean;
@@ -68,7 +71,7 @@ export interface CreatePipelineInput {
 export type PipelineEmit = (type: string, data: unknown) => void;
 
 export async function runCreatePipeline(input: CreatePipelineInput, emit: PipelineEmit, opts?: { resume?: boolean }): Promise<void> {
-  const { idea, projectId, videoProvider, style, aspect, enableGates, templateId, primaryCharacterRef, lockedCharacters, cameraDefault, previewSeedImage, references, replicaScript, editStyle, language, sketchLock, pacingGate, pacingOverride } = input as CreatePipelineInput & Record<string, any>;
+  const { idea, projectId, videoProvider, imageProvider, imageModel, imageQuality, style, aspect, enableGates, templateId, primaryCharacterRef, lockedCharacters, cameraDefault, previewSeedImage, references, replicaScript, editStyle, language, sketchLock, pacingGate, pacingOverride } = input as CreatePipelineInput & Record<string, any>;
   // v12.32.0:阶段耗时归因 —— 各阶段边界本就发 send('step',{step}),顺手用它做计时埋点(零额外侵入)。
   const _stageTimer = new StageTimer();
   let _curStage: string | null = null;
@@ -95,6 +98,7 @@ export async function runCreatePipeline(input: CreatePipelineInput, emit: Pipeli
 
   try {
     const orchestrator = new HybridOrchestrator();
+    orchestrator.setImageSelection({ provider: imageProvider, model: imageModel, quality: imageQuality });
     orchestrator.onProgress = (type, data) => {
       send(type, data);
       // v12.143:草图锁的每镜草图落 storyboard-sketch 资产(面板展示/重生复用);fire-and-forget
@@ -348,6 +352,7 @@ export async function runCreatePipeline(input: CreatePipelineInput, emit: Pipeli
           id: projectId, userId, title: idea.slice(0, 30), description: idea,
           coverUrls: [], status: 'active',
           aspect: aspect || '16:9', // v10.6.0 项目级画幅(注:题材触发的 orchestrator 内部自动竖屏翻转不回写,以用户显式选择为准)
+          imageProvider: imageProvider || null, imageModel: imageModel || null, imageQuality: imageQuality || 'standard',
           styleId: style || null, primaryCharacterRef: effectiveCameoRef || null,
           lockedCharacters: sanitizedLocked,
         });
@@ -359,6 +364,9 @@ export async function runCreatePipeline(input: CreatePipelineInput, emit: Pipeli
           await updateProjectById(projectId, {
             ...(style ? { style_id: style } : {}),
             ...(aspect ? { aspect } : {}), // v10.6.0 换画幅重跑时同步
+            ...(imageProvider !== undefined ? { image_provider: imageProvider || null } : {}),
+            ...(imageModel !== undefined ? { image_model: imageModel || null } : {}),
+            ...(imageQuality !== undefined ? { image_quality: imageQuality } : {}),
             locked_characters: lockedJson,
             ...(effectiveCameoRef ? { primary_character_ref: effectiveCameoRef } : {}),
           });

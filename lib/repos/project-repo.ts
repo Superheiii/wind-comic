@@ -21,11 +21,14 @@ export interface ProjectRow {
   status: string;
   /** v10.6.0 项目级画幅('9:16' 竖屏优先;旧行 DEFAULT '16:9') */
   aspect: string;
+  image_provider: string | null;
+  image_model: string | null;
+  image_quality: string | null;
   created_at: string;
   updated_at: string;
 }
 
-const COLS = 'id, user_id, title, description, cover_urls, status, aspect, created_at, updated_at';
+const COLS = 'id, user_id, title, description, cover_urls, status, aspect, image_provider, image_model, image_quality, created_at, updated_at';
 
 export async function getProject(id: string): Promise<ProjectRow | null> {
   return getDbDriver().get<ProjectRow>(`SELECT ${COLS} FROM projects WHERE id = ?`, [id]);
@@ -159,6 +162,9 @@ export interface InsertProjectFullInput {
   styleId?: string | null;
   /** v10.6.0 项目级画幅 */
   aspect?: string;
+  imageProvider?: string | null;
+  imageModel?: string | null;
+  imageQuality?: string | null;
   primaryCharacterRef?: string | null;
   /** 锁定角色数组 (repo 负责 JSON 序列化). */
   lockedCharacters?: unknown[];
@@ -168,12 +174,13 @@ export async function insertProjectFull(input: InsertProjectFullInput): Promise<
   const driver = getDbDriver();
   const ts = new Date().toISOString();
   await driver.run(
-    `INSERT INTO projects (id, user_id, title, description, cover_urls, status, aspect, style_id, primary_character_ref, locked_characters, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO projects (id, user_id, title, description, cover_urls, status, aspect, image_provider, image_model, image_quality, style_id, primary_character_ref, locked_characters, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.id, input.userId, input.title, input.description ?? null,
       JSON.stringify(input.coverUrls ?? []), input.status || 'active',
       input.aspect || '16:9', // v10.6.0 项目级画幅
+      input.imageProvider ?? null, input.imageModel ?? null, input.imageQuality ?? 'standard',
       input.styleId ?? null, input.primaryCharacterRef ?? null,
       JSON.stringify(input.lockedCharacters ?? []), ts, ts,
     ],
@@ -186,7 +193,7 @@ export async function insertProjectFull(input: InsertProjectFullInput): Promise<
 
 /** v9.0.2: 允许 updateProjectById 写的列白名单 (挡 key 注入; JSON 列由调用方先 stringify). */
 const PROJECT_UPDATABLE_COLS = new Set([
-  'title', 'description', 'cover_urls', 'status', 'aspect',
+  'title', 'description', 'cover_urls', 'status', 'aspect', 'image_provider', 'image_model', 'image_quality',
   'style_id', 'primary_character_ref', 'locked_characters',
   'director_notes', 'script_data',
   // v9.0.2b: 轻量共享链接

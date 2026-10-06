@@ -14,7 +14,7 @@
  *   COMFYUI_ENABLED=true                (是否启用)
  */
 
-const COMFYUI_URL = process.env.COMFYUI_URL || 'http://localhost:8188';
+const COMFYUI_URL = process.env.COMFYUI_BASE_URL || process.env.COMFYUI_URL || 'http://127.0.0.1:8188';
 const COMFYUI_ENABLED = process.env.COMFYUI_ENABLED === 'true';
 
 export function hasComfyUI(): boolean {

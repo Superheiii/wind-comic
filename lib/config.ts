@@ -111,9 +111,28 @@ export const API_CONFIG = {
   },
 
   comfyui: {
-    url: process.env.COMFYUI_URL || 'http://localhost:8188',
+    url: process.env.COMFYUI_BASE_URL || process.env.COMFYUI_URL || 'http://127.0.0.1:8188',
     enabled: process.env.COMFYUI_ENABLED === 'true',
     pricing: 0  // 本地运行，无额外费用
+  },
+
+  image: {
+    get defaultProvider() { return process.env.IMAGE_PROVIDER || ''; },
+    get defaultModel() { return process.env.IMAGE_MODEL || ''; },
+    qwen: {
+      get apiKey() { return process.env.QWEN_IMAGE_API_KEY || ''; },
+      get baseURL() { return process.env.QWEN_IMAGE_BASE_URL || ''; },
+      get model() { return process.env.QWEN_IMAGE_MODEL || 'qwen-image'; },
+    },
+    seedream: {
+      get apiKey() { return process.env.SEEDREAM_API_KEY || ''; },
+      get baseURL() { return process.env.SEEDREAM_BASE_URL || ''; },
+      get model() { return process.env.SEEDREAM_MODEL || 'seedream'; },
+    },
+    comfyui: { get model() { return process.env.COMFYUI_IMAGE_MODEL || 'default-workflow'; } },
+    flux: { get model() { return process.env.FLUX_IMAGE_MODEL || 'flux'; } },
+    openai: { get model() { return process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1'; } },
+    midjourney: { get model() { return process.env.MIDJOURNEY_IMAGE_MODEL || 'default'; } },
   },
 
 };

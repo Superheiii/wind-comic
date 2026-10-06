@@ -27,9 +27,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getUserFromRequest } from '../auth/lib';
-import { MidjourneyService, hasMidjourney } from '@/services/midjourney.service';
 import { MinimaxService } from '@/services/minimax.service';
 import { MetaSOH3Service } from '@/services/metaso-h3.service';
+import { imageGenerationService } from '@/services/image-generation.service';
+import { imageProviderUserMessage } from '@/lib/image-providers/errors';
 import { API_CONFIG } from '@/lib/config';
 import { checkPlan } from '@/lib/plan-gate';
 import {
@@ -72,6 +73,9 @@ export async function POST(request: NextRequest) {
   const aspect = ASPECT_TO_RATIO[aspectInput] || '16:9';
   const videoToo = body?.videoToo !== false; // 默认 true
   const videoProvider = body?.videoProvider === 'metaso-h3' ? 'metaso-h3' : 'minimax';
+  const imageProvider = typeof body?.imageProvider === 'string' ? body.imageProvider.trim() || undefined : undefined;
+  const imageModel = typeof body?.imageModel === 'string' ? body.imageModel.trim() || undefined : undefined;
+  const imageQuality = body?.imageQuality === 'draft' || body?.imageQuality === 'high' ? body.imageQuality : 'standard';
 
   if (!rawIdea) return NextResponse.json({ error: '缺 idea' }, { status: 400 });
   if (rawIdea.length < 10) return NextResponse.json({ error: 'idea 至少 10 个字符' }, { status: 400 });
@@ -133,14 +137,33 @@ export async function POST(request: NextRequest) {
 
   // ── Step 1: MJ 出 1 张分镜图 ──
   let imageUrl = '';
-  if (!hasMidjourney()) {
+  try {
+    const generated = await imageGenerationService.generate({
+      prompt: visualPrompt,
+      aspectRatio: aspect,
+      provider: imageProvider,
+      model: imageModel,
+      quality: imageQuality,
+      count: 1,
+      metadata: { source: 'preview-shot' },
+    });
+    imageUrl = generated.images[0]?.url || '';
+    if (!imageUrl) throw new Error('image provider returned no image url');
+  } catch (error) {
+    return NextResponse.json({ error: imageProviderUserMessage(error) }, { status: 422 });
+  }
+  /* 旧 Midjourney 试拍分支已停用，图片生成必须统一从上方
+     ImageGenerationService 进入。
+  if (false) {
     return NextResponse.json(
-      { error: 'MIDJOURNEY 未配置, 试拍依赖 MJ 出图' },
+      { error: 'legacy image branch disabled' },
       { status: 422 },
     );
   }
-  try {
-    const mj = new MidjourneyService();
+  if (false) try {
+    const mj: { generateImage: (prompt: string, options: { aspectRatio: string; skipUpscale: boolean }) => Promise<string> } = {
+      generateImage: async () => { throw new Error('legacy branch disabled'); },
+    };
     imageUrl = await mj.generateImage(visualPrompt, {
       aspectRatio: aspect,
       // 试拍跳过 upscale, 直接拿 grid 即可 (省时间, 成本低)
@@ -148,7 +171,7 @@ export async function POST(request: NextRequest) {
     });
     if (!imageUrl) throw new Error('MJ 返回空 imageUrl');
     console.log(`[preview-shot] image done: ${imageUrl.slice(0, 80)}`);
-  } catch (e) {
+  } catch (e: any) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
       { error: `试拍出图失败: ${msg.slice(0, 200)}` },
@@ -157,6 +180,7 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Step 2 (optional): explicit provider I2V 1 段 5s ──
+  */
   let videoUrl: string | undefined;
   if (videoToo) {
     if (videoProvider === 'metaso-h3' && !new MetaSOH3Service().isConfigured()) {

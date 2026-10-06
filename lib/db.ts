@@ -443,6 +443,9 @@ addColumnIfMissing('projects', 'mode', "TEXT DEFAULT 'episodic'");           // 
 addColumnIfMissing('projects', 'execution_mode', "TEXT DEFAULT 'dialogue'"); // ExecutionMode
 addColumnIfMissing('projects', 'style_id', 'TEXT');                           // 风格预设 id
 addColumnIfMissing('projects', 'aspect', "TEXT DEFAULT '16:9'");              // v10.6.0 项目级画幅(竖屏优先;旧项目默认横屏=零回归)
+addColumnIfMissing('projects', 'image_provider', 'TEXT');
+addColumnIfMissing('projects', 'image_model', 'TEXT');
+addColumnIfMissing('projects', 'image_quality', "TEXT DEFAULT 'standard'");
 addColumnIfMissing('projects', 'global_asset_ids', "TEXT DEFAULT '[]'");      // JSON array
 addColumnIfMissing('projects', 'output_config', 'TEXT');                      // JSON object
 addColumnIfMissing('projects', 'series_id', 'TEXT');

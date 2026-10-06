@@ -76,6 +76,15 @@ const durationOptions = ['3s', '5s', '8s']; // 调整为适配当前API能力的
 // v10.6.0 竖屏优先:9:16 置首 = 新项目默认竖屏(2026 短剧主战场);横屏仍一键可选
 const aspectOptions = ['9:16', '16:9', '1:1', '2.35:1'];
 
+type ImageProviderCatalogItem = {
+  id: string;
+  name: string;
+  configured: boolean;
+  status: string;
+  models: string[];
+  capabilities: { referenceImages?: boolean; maxReferenceImages?: number };
+};
+
 // v12.5.0(#4):SSE 里程碑事件 → 全局指示条阶段中文名
 const SSE_PHASE: Record<string, string> = {
   plan: '导演规划', script: '编写剧本', characters: '设计角色', scenes: '构建场景',
@@ -97,9 +106,30 @@ export default function DashboardCreatePage() {
   const [urlExtracting, setUrlExtracting] = useState(false);
   const [urlHint, setUrlHint] = useState<string | null>(null);
   const [videoProvider, setVideoProvider] = useState('veo');
+  const [imageProvider, setImageProvider] = useState('');
+  const [imageModel, setImageModel] = useState('');
+  const [imageProviders, setImageProviders] = useState<ImageProviderCatalogItem[]>([]);
   const [style, setStyle] = useState(stylePresets[0].en);
   const [selectedTemplate, setSelectedTemplate] = useState<StoryTemplate | null>(null);
   // v2.18 P1: 模板展开 / 详情逻辑 已迁移到 <TemplateLibraryPicker> 内, 老 expandedTemplate 状态废弃
+
+  useEffect(() => {
+    let live = true;
+    fetch('/api/image-providers')
+      .then((response) => response.ok ? response.json() : null)
+      .then((body) => {
+        if (!live || !Array.isArray(body?.providers)) return;
+        const providers = body.providers as ImageProviderCatalogItem[];
+        setImageProviders(providers);
+        const first = providers.find((provider) => provider.configured);
+        if (first) {
+          setImageProvider((current) => current || first.id);
+          setImageModel((current) => current || first.models[0] || '');
+        }
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
 
   // Vidu-style: pre-fill idea from URL query param (from cases page "用这个创作")
   useEffect(() => {
@@ -328,7 +358,7 @@ export default function DashboardCreatePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          idea: sanitizedIdea, videoProvider, style, duration, aspect, projectId,
+          idea: sanitizedIdea, videoProvider, imageProvider: imageProvider || undefined, imageModel: imageModel || undefined, style, duration, aspect, projectId,
           templateId: selectedTemplate?.id,
           // v2.12 Phase 1: 携带 1-3 角色锁脸;create-stream 会持久化到 projects.locked_characters,
           // 并把第一个角色 imageUrl 同步到 projects.primary_character_ref(兜底现有单角色编排链路)
@@ -789,6 +819,8 @@ export default function DashboardCreatePage() {
           style={style}
           aspect={aspect}
           videoProvider={videoProvider}
+          imageProvider={imageProvider || undefined}
+          imageModel={imageModel || undefined}
           videoToo={true}
           onAccept={(seed) => {
             setShowPreview(false);
@@ -1092,6 +1124,44 @@ export default function DashboardCreatePage() {
                 ))}
               </div>
             </div>
+          </div>
+
+          <div className="cinema-card-hi p-3" data-testid="image-provider-picker">
+            <Eyebrow>Image · 图片模型</Eyebrow>
+            <div className="grid grid-cols-2 xl:grid-cols-3 gap-2 mt-2">
+              {imageProviders.map((provider) => (
+                <button
+                  key={provider.id}
+                  type="button"
+                  disabled={!provider.configured}
+                  onClick={() => {
+                    setImageProvider(provider.id);
+                    setImageModel(provider.models[0] || '');
+                  }}
+                  className={`cinema-card-hi p-2 text-left transition-all ${imageProvider === provider.id ? 'border-[var(--cinema-amber)]' : ''} ${provider.configured ? 'hover:border-[var(--cinema-border-hi)]' : 'opacity-45 cursor-not-allowed'}`}
+                >
+                  <div className="cinema-headline text-xs">{provider.name}</div>
+                  <div className="cinema-mono text-[9px] opacity-60 mt-1">
+                    {provider.configured ? '已配置' : provider.status === 'pending' ? '待接入 API' : '未配置'}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {imageProvider && (
+              <select
+                value={imageModel}
+                onChange={(event) => setImageModel(event.target.value)}
+                className="mt-2 w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1.5 text-xs"
+                aria-label="图片模型"
+              >
+                {(imageProviders.find((provider) => provider.id === imageProvider)?.models || []).map((model) => (
+                  <option value={model} key={model}>{model}</option>
+                ))}
+              </select>
+            )}
+            {!imageProviders.some((provider) => provider.configured) && (
+              <p className="cinema-mono text-[10px] text-[var(--cinema-amber)] mt-2">尚未配置可用的图片模型，请前往设置 → 图片模型。</p>
+            )}
           </div>
 
           {createMode === 'pro' && <div>

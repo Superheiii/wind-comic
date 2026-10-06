@@ -16,6 +16,9 @@ let HAS_MJ_KEY = true;
 let HAS_MINIMAX_KEY = true;
 let MJ_BEHAVIOR: 'ok' | 'throw' = 'ok';
 let MINIMAX_BEHAVIOR: 'ok' | 'throw' | 'empty' = 'ok';
+let IMAGE_BEHAVIOR: 'ok' | 'throw' = 'ok';
+let LAST_IMAGE_REQUEST: any = null;
+let LAST_H3_IMAGE_URL: string | null = null;
 
 vi.mock('@/lib/db', () => ({
   db: { prepare: () => ({ get: () => ({ id: 'test-user' }) }) },
@@ -32,6 +35,26 @@ vi.mock('@/services/midjourney.service', () => ({
     async generateImage() {
       if (MJ_BEHAVIOR === 'throw') throw new Error('mj boom');
       return 'http://example.com/mj-preview.png';
+    }
+  },
+}));
+
+vi.mock('@/services/image-generation.service', () => ({
+  imageGenerationService: {
+    async generate(request: any) {
+      LAST_IMAGE_REQUEST = request;
+      if (IMAGE_BEHAVIOR === 'throw') throw new Error('no image provider');
+      return { provider: request.provider || 'qwen', model: request.model || 'qwen-image', images: [{ url: 'http://example.com/qwen-preview.png' }] };
+    },
+  },
+}));
+
+vi.mock('@/services/metaso-h3.service', () => ({
+  MetaSOH3Service: class {
+    isConfigured() { return true; }
+    async generateVideo(imageUrl: string) {
+      LAST_H3_IMAGE_URL = imageUrl;
+      return 'http://example.com/h3-preview.mp4';
     }
   },
 }));
@@ -78,6 +101,9 @@ beforeEach(() => {
   HAS_MINIMAX_KEY = true;
   MJ_BEHAVIOR = 'ok';
   MINIMAX_BEHAVIOR = 'ok';
+  IMAGE_BEHAVIOR = 'ok';
+  LAST_IMAGE_REQUEST = null;
+  LAST_H3_IMAGE_URL = null;
 });
 
 describe('/api/preview-shot validation', () => {
@@ -111,16 +137,28 @@ describe('/api/preview-shot validation', () => {
     expect(body.category).toBe('injection');
   });
 
-  it('422 when MJ not configured', async () => {
-    HAS_MJ_KEY = false;
+  it('422 when no image provider is available', async () => {
+    IMAGE_BEHAVIOR = 'throw';
     const POST = await importPost();
     const res = await POST(mkReq({ idea: '一个唐朝长安少年剑客复仇的故事' }));
     expect(res.status).toBe(422);
-    expect((await res.json()).error).toContain('MIDJOURNEY');
+    expect((await res.json()).error).not.toContain('MIDJOURNEY');
   });
 });
 
 describe('/api/preview-shot happy path', () => {
+  it('uses the selected image provider/model and forwards only image.url to H3', async () => {
+    const POST = await importPost();
+    const res = await POST(mkReq({
+      idea: '一个唐朝长安少年剑客复仇的故事',
+      imageProvider: 'qwen', imageModel: 'qwen-image-test', videoProvider: 'metaso-h3',
+    }));
+    expect(res.status).toBe(200);
+    expect(LAST_IMAGE_REQUEST.provider).toBe('qwen');
+    expect(LAST_IMAGE_REQUEST.model).toBe('qwen-image-test');
+    expect(LAST_H3_IMAGE_URL).toBe('http://example.com/qwen-preview.png');
+  });
+
   it('200 returns imageUrl + videoUrl + prompt + elapsedMs', async () => {
     const POST = await importPost();
     const res = await POST(
@@ -128,7 +166,7 @@ describe('/api/preview-shot happy path', () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.imageUrl).toBe('http://example.com/mj-preview.png');
+    expect(body.imageUrl).toBe('http://example.com/qwen-preview.png');
     expect(body.videoUrl).toBe('http://example.com/preview.mp4');
     expect(body.prompt).toContain('A single key shot');
     expect(typeof body.elapsedMs).toBe('number');
@@ -143,7 +181,7 @@ describe('/api/preview-shot happy path', () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.imageUrl).toBe('http://example.com/mj-preview.png');
+    expect(body.imageUrl).toBe('http://example.com/qwen-preview.png');
     expect(body.videoUrl).toBeUndefined();
   });
 
@@ -153,7 +191,7 @@ describe('/api/preview-shot happy path', () => {
     const res = await POST(mkReq({ idea: '一个唐朝长安少年剑客复仇的故事' }));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.imageUrl).toBe('http://example.com/mj-preview.png');
+    expect(body.imageUrl).toBe('http://example.com/qwen-preview.png');
     expect(body.videoUrl).toBeUndefined();
     expect(body.warnings.length).toBeGreaterThan(0);
     expect(body.warnings[0]).toContain('视频生成失败');
@@ -165,13 +203,13 @@ describe('/api/preview-shot happy path', () => {
     const res = await POST(mkReq({ idea: '一个唐朝长安少年剑客复仇的故事' }));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.imageUrl).toBe('http://example.com/mj-preview.png');
+    expect(body.imageUrl).toBe('http://example.com/qwen-preview.png');
     expect(body.videoUrl).toBeUndefined();
     expect(body.warnings.some((w: string) => w.includes('MINIMAX_API_KEY'))).toBe(true);
   });
 
-  it('MJ throws → 422 (no point continuing without image)', async () => {
-    MJ_BEHAVIOR = 'throw';
+  it('image provider throws → 422 and video is not attempted', async () => {
+    IMAGE_BEHAVIOR = 'throw';
     const POST = await importPost();
     const res = await POST(mkReq({ idea: '一个唐朝长安少年剑客复仇的故事' }));
     expect(res.status).toBe(422);
