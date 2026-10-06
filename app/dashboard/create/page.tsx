@@ -86,6 +86,17 @@ type ImageProviderCatalogItem = {
   healthCheck?: boolean;
 };
 
+const IMAGE_MODEL_LABELS: Record<string, string> = {
+  'qwen-image-3.0': 'Qwen-Image 3.0（推荐）',
+  'qwen-image-3.0-pro': 'Qwen-Image 3.0 Pro',
+  'qwen-image-2.0': 'Qwen-Image 2.0',
+};
+
+/** 对已知模型使用可读名称，提交给服务端的值仍保持原始模型 ID。 */
+function imageModelLabel(model: string): string {
+  return IMAGE_MODEL_LABELS[model] || model;
+}
+
 // v12.5.0(#4):SSE 里程碑事件 → 全局指示条阶段中文名
 const SSE_PHASE: Record<string, string> = {
   plan: '导演规划', script: '编写剧本', characters: '设计角色', scenes: '构建场景',
@@ -1174,7 +1185,7 @@ export default function DashboardCreatePage() {
                 aria-label="图片模型"
               >
                 {(imageProviders.find((provider) => provider.id === imageProvider)?.models || []).map((model) => (
-                  <option value={model} key={model}>{model}</option>
+                  <option value={model} key={model}>{imageModelLabel(model)}</option>
                 ))}
               </select>
             )}

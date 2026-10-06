@@ -8,10 +8,10 @@ const originalEnv = {
   model: process.env.QWEN_IMAGE_MODEL,
 };
 
-function configureQwen() {
+function configureQwen(model = 'qwen-image-3.0') {
   process.env.QWEN_IMAGE_API_KEY = 'test-qwen-key';
   process.env.QWEN_IMAGE_BASE_URL = 'https://dashscope.aliyuncs.com';
-  process.env.QWEN_IMAGE_MODEL = 'qwen-image-2.0';
+  process.env.QWEN_IMAGE_MODEL = model;
 }
 
 afterEach(() => {
@@ -38,8 +38,8 @@ describe('QwenImageProvider', () => {
     } satisfies Partial<ImageProviderError>);
   });
 
-  it('uses the verified DashScope contract and normalizes image URLs', async () => {
-    configureQwen();
+  it('keeps qwen-image-2.0 text-to-image compatibility', async () => {
+    configureQwen('qwen-image-2.0');
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       request_id: 'req-test-001',
       output: {
@@ -76,6 +76,67 @@ describe('QwenImageProvider', () => {
     });
   });
 
+  it('sends qwen-image-3.0 text-to-image through the synchronous DashScope contract', async () => {
+    configureQwen('qwen-image-3.0');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      request_id: 'req-qwen-3',
+      output: { rewrite_status: 'succeeded', choices: [{ message: { content: [{ image: 'https://image.example/qwen-3.png' }] } }] },
+      usage: { output_width: 1024, output_height: 1024, input_image_count: 0 },
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new QwenImageProvider().generate({ prompt: '未来城市海报' });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toMatchObject({
+      model: 'qwen-image-3.0',
+      input: { messages: [{ role: 'user', content: [{ text: '未来城市海报' }] }] },
+      parameters: { n: 1, prompt_extend: true, watermark: false },
+    });
+    expect(JSON.parse(init.body).parameters.size).toBeUndefined();
+    expect(result.images[0]).toMatchObject({ url: 'https://image.example/qwen-3.png', width: 1024, height: 1024 });
+  });
+
+  it('sends qwen-image-3.0-pro text-to-image with its selected model', async () => {
+    configureQwen('qwen-image-3.0-pro');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      output: { choices: [{ message: { content: [{ image: 'https://image.example/qwen-3-pro.png' }] } }] },
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new QwenImageProvider().generate({ prompt: '电影感人物肖像', aspectRatio: '16:9' });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toMatchObject({
+      model: 'qwen-image-3.0-pro',
+      parameters: { size: '1920*1080' },
+    });
+    expect(result.images[0]?.url).toBe('https://image.example/qwen-3-pro.png');
+  });
+
+  it('sends one to three 3.0 reference images before the editing text', async () => {
+    configureQwen('qwen-image-3.0');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      output: { choices: [{ message: { content: [{ image: 'https://image.example/qwen-edit.png' }] } }] },
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new QwenImageProvider().generate({
+      prompt: '将三张角色图合成为海报',
+      referenceImages: ['https://image.example/one.png'],
+      characterReferences: ['https://image.example/two.png'],
+      styleReferences: ['https://image.example/three.png'],
+    });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body).input.messages[0].content).toEqual([
+      { image: 'https://image.example/one.png' },
+      { image: 'https://image.example/two.png' },
+      { image: 'https://image.example/three.png' },
+      { text: '将三张角色图合成为海报' },
+    ]);
+    expect(new QwenImageProvider().getCapabilities()).toMatchObject({
+      imageToImage: true, imageEdit: true, referenceImages: true, multiReference: true, maxReferenceImages: 3,
+    });
+  });
+
   it('rejects a successful HTTP response that does not contain a usable image URL', async () => {
     configureQwen();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -108,6 +169,13 @@ describe('QwenImageProvider', () => {
     await expect(new QwenImageProvider().healthCheck()).resolves.toEqual({
       status: 'configured', message: 'Qwen 图片服务连接正常。',
     });
-    expect(fetchMock.mock.calls[0][0]).toBe('https://dashscope.aliyuncs.com/api/v1/models?model=qwen-image-2.0&page_no=1&page_size=1');
+    expect(fetchMock.mock.calls[0][0]).toBe('https://dashscope.aliyuncs.com/api/v1/models?model=qwen-image-3.0&page_no=1&page_size=1');
+  });
+
+  it('lists all supported Qwen models with 3.0 as the default recommendation', () => {
+    configureQwen();
+    expect(new QwenImageProvider().models().slice(0, 3)).toEqual([
+      'qwen-image-3.0', 'qwen-image-3.0-pro', 'qwen-image-2.0',
+    ]);
   });
 });

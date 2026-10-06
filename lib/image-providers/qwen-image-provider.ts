@@ -3,6 +3,7 @@ import { FetchTimeoutError, fetchWithTimeout } from '@/lib/fetch-timeout';
 import { normalizeBaseURL } from '@/lib/base-url';
 import { ImageProviderError } from './errors';
 import type {
+  ImageEditRequest,
   ImageGenerateRequest,
   ImageGenerationResult,
   ImageProviderCapabilities,
@@ -15,13 +16,29 @@ const QWEN_MODELS_PATH = '/api/v1/models';
 const GENERATION_TIMEOUT_MS = 90_000;
 const HEALTH_CHECK_TIMEOUT_MS = 10_000;
 
-/** Qwen-Image 2.0 官方推荐的 2K 画幅，2.35:1 由项目自定义映射为同等像素级别。 */
-const SIZE_BY_ASPECT: Record<string, string> = {
+export const SUPPORTED_QWEN_IMAGE_MODELS = [
+  'qwen-image-3.0',
+  'qwen-image-3.0-pro',
+  'qwen-image-2.0',
+] as const;
+
+/** 2.0 的固定画幅兼容映射，保留既有试拍输出行为。 */
+const QWEN_2_SIZE_BY_ASPECT: Record<string, string> = {
   '16:9': '2688*1536',
   '9:16': '1536*2688',
   '1:1': '2048*2048',
   '4:3': '2368*1728',
   '3:4': '1728*2368',
+  '2.35:1': '2048*872',
+};
+
+/** 3.0 仅在调用方指定画幅时传入尺寸；未指定时交由模型自动推荐。 */
+const QWEN_3_SIZE_BY_ASPECT: Record<string, string> = {
+  '16:9': '1920*1080',
+  '9:16': '1080*1920',
+  '1:1': '1536*1536',
+  '4:3': '1920*1440',
+  '3:4': '1440*1920',
   '2.35:1': '2048*872',
 };
 
@@ -36,6 +53,7 @@ type QwenResponse = {
   code?: string;
   message?: string;
   output?: {
+    rewrite_status?: string;
     choices?: Array<{
       finish_reason?: string;
       message?: {
@@ -47,6 +65,10 @@ type QwenResponse = {
     width?: number;
     height?: number;
     image_count?: number;
+    output_width?: number;
+    output_height?: number;
+    output_image_count?: number;
+    input_image_count?: number;
   };
 };
 
@@ -61,6 +83,14 @@ function endpoint(baseURL: string, path: string): string {
 
 function isHttpUrl(value: unknown): value is string {
   return typeof value === 'string' && /^https?:\/\//i.test(value);
+}
+
+function isQwenImageInput(value: unknown): value is string {
+  return isHttpUrl(value) || (typeof value === 'string' && /^data:image\/[^;]+;base64,/i.test(value));
+}
+
+function isQwen3Model(model: string): boolean {
+  return model === 'qwen-image-3.0' || model === 'qwen-image-3.0-pro';
 }
 
 /** 统一将上游 HTTP/业务错误折叠为项目现有的图片 Provider 错误体系。 */
@@ -86,11 +116,13 @@ async function readJson(response: Response): Promise<QwenResponse | undefined> {
   }
 }
 
-function requestedSize(request: ImageGenerateRequest): string {
+function requestedSize(request: ImageGenerateRequest, model: string): string | undefined {
   if (Number.isInteger(request.width) && Number.isInteger(request.height) && request.width! > 0 && request.height! > 0) {
     return `${request.width}*${request.height}`;
   }
-  return SIZE_BY_ASPECT[request.aspectRatio || ''] || SIZE_BY_ASPECT['16:9'];
+  const sizes = isQwen3Model(model) ? QWEN_3_SIZE_BY_ASPECT : QWEN_2_SIZE_BY_ASPECT;
+  if (!request.aspectRatio) return undefined;
+  return sizes[request.aspectRatio] || undefined;
 }
 
 function requestedCount(count: number | undefined): number {
@@ -106,43 +138,77 @@ function extractImages(body: QwenResponse, request: ImageGenerateRequest): Image
 
   return urls.map((url) => ({
     url,
-    width: body.usage?.width,
-    height: body.usage?.height,
+    width: body.usage?.output_width || body.usage?.width,
+    height: body.usage?.output_height || body.usage?.height,
     seed: request.seed,
-    metadata: body.request_id ? { requestId: body.request_id } : undefined,
+    metadata: body.request_id || body.output?.rewrite_status
+      ? { requestId: body.request_id, rewriteStatus: body.output?.rewrite_status }
+      : undefined,
   }));
 }
 
+/** 合并统一请求中的参考图字段，并保留调用方给出的顺序。 */
+function collectReferenceImages(request: ImageGenerateRequest): string[] {
+  return [
+    ...(request.referenceImages || []),
+    ...(request.characterReferences || []),
+    ...(request.styleReferences || []),
+  ];
+}
+
+/** 3.0 图生图的 content 必须先给 1–3 张图，再给唯一的一条编辑文本。 */
+function buildContent(model: string, request: ImageGenerateRequest): Array<{ image?: string; text?: string }> {
+  const references = collectReferenceImages(request);
+  if (references.length === 0) return [{ text: request.prompt }];
+  if (!isQwen3Model(model)) {
+    throw new ImageProviderError('IMAGE_EDIT_NOT_SUPPORTED', 'Qwen-Image 2.0 当前仅保持文生图兼容；参考图编辑请切换到 Qwen-Image 3.0。', 'qwen');
+  }
+  if (references.length > 3) {
+    throw new ImageProviderError('INVALID_REFERENCE_IMAGE', 'Qwen-Image 3.0 最多支持 3 张参考图。', 'qwen');
+  }
+  if (!references.every(isQwenImageInput)) {
+    throw new ImageProviderError('INVALID_REFERENCE_IMAGE', 'Qwen 参考图必须是公网图片 URL 或 data:image Base64。', 'qwen');
+  }
+  return [...references.map((image) => ({ image })), { text: request.prompt }];
+}
+
 /**
- * Qwen-Image 2.0 的百炼同步适配器。
+ * Qwen-Image 2.0 / 3.0 的百炼同步适配器。
  * 上游的 choices/message/content 格式只在此处解析，下游始终只消费统一 images[].url。
  */
 export class QwenImageProvider implements UnifiedImageProvider {
   readonly id = 'qwen';
   readonly name = 'Qwen-Image';
 
-  models = (): string[] => [currentConfig().model];
+  models = (): string[] => {
+    const configured = currentConfig().model;
+    return Array.from(new Set([configured, ...SUPPORTED_QWEN_IMAGE_MODELS]));
+  };
 
   isConfigured = (): boolean => Boolean(currentConfig().apiKey.trim());
 
-  getCapabilities = (): ImageProviderCapabilities => ({
-    textToImage: true,
-    // TODO(qwen): 图像编辑会在后续按独立官方契约接入，避免把文本生成请求错误用于参考图。
-    imageToImage: false,
-    imageEdit: false,
-    referenceImages: false,
-    multiReference: false,
-    characterReference: false,
-    styleReference: false,
-    controlNet: false,
-    lora: false,
-    supportsSeed: true,
-    supportsNegativePrompt: true,
-    supportedAspectRatios: Object.keys(SIZE_BY_ASPECT),
-  });
+  getCapabilities = (): ImageProviderCapabilities => {
+    const isThree = isQwen3Model(currentConfig().model);
+    return {
+      textToImage: true,
+      // 3.0 系列使用同一条已核对的同步契约支持图生图和编辑；2.0 保持既有文生图兼容。
+      imageToImage: isThree,
+      imageEdit: isThree,
+      referenceImages: isThree,
+      multiReference: isThree,
+      characterReference: isThree,
+      styleReference: isThree,
+      controlNet: false,
+      lora: false,
+      supportsSeed: true,
+      supportsNegativePrompt: true,
+      supportedAspectRatios: Object.keys(isThree ? QWEN_3_SIZE_BY_ASPECT : QWEN_2_SIZE_BY_ASPECT),
+      ...(isThree ? { maxReferenceImages: 3 } : {}),
+    };
+  };
 
   /**
-   * 使用官方同步接口完成文生图；Qwen-Image 2.0 无需任务轮询。
+   * 使用官方同步接口完成文生图或 3.0 图生图；该接口无需任务轮询。
    * 任何未拿到可用 URL 的结果都会抛出统一错误，调用方自然不会继续交给 H3。
    */
   async generate(request: ImageGenerateRequest): Promise<ImageGenerationResult> {
@@ -156,25 +222,23 @@ export class QwenImageProvider implements UnifiedImageProvider {
     if (!request.prompt.trim()) {
       throw new ImageProviderError('IMAGE_GENERATION_FAILED', 'Qwen 图片生成缺少提示词。', this.id);
     }
-    if ((request.referenceImages?.length || 0) + (request.characterReferences?.length || 0) + (request.styleReferences?.length || 0) > 0) {
-      throw new ImageProviderError('IMAGE_EDIT_NOT_SUPPORTED', '当前 Qwen Provider 暂未启用参考图编辑，请先使用文生图。', this.id);
-    }
-
     const model = request.model || config.model;
+    const content = buildContent(model, request);
+    const size = requestedSize(request, model);
     const payload = {
       model,
       input: {
         messages: [{
           role: 'user',
-          content: [{ text: request.prompt }],
+          content,
         }],
       },
       parameters: {
-        negative_prompt: request.negativePrompt,
-        size: requestedSize(request),
         n: requestedCount(request.count),
         prompt_extend: true,
         watermark: false,
+        ...(size ? { size } : {}),
+        ...(request.negativePrompt ? { negative_prompt: request.negativePrompt } : {}),
         ...(Number.isInteger(request.seed) ? { seed: request.seed } : {}),
       },
     };
@@ -219,9 +283,18 @@ export class QwenImageProvider implements UnifiedImageProvider {
       // 同步接口没有 taskId，仅保留用于追踪的安全 requestId 与结束原因。
       raw: {
         requestId: body?.request_id,
+        rewriteStatus: body?.output?.rewrite_status,
         finishReasons: body?.output?.choices?.map((choice) => choice.finish_reason).filter(Boolean),
       },
     };
+  }
+
+  /** 统一编辑入口复用 generate，确保下游始终只获得 ImageGenerationResult。 */
+  async edit(request: ImageEditRequest): Promise<ImageGenerationResult> {
+    return this.generate({
+      ...request,
+      referenceImages: [request.imageUrl, ...(request.referenceImages || [])],
+    });
   }
 
   /**

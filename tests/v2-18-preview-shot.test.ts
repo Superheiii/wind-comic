@@ -151,11 +151,11 @@ describe('/api/preview-shot happy path', () => {
     const POST = await importPost();
     const res = await POST(mkReq({
       idea: '一个唐朝长安少年剑客复仇的故事',
-      imageProvider: 'qwen', imageModel: 'qwen-image-test', videoProvider: 'metaso-h3',
+      imageProvider: 'qwen', imageModel: 'qwen-image-3.0', videoProvider: 'metaso-h3',
     }));
     expect(res.status).toBe(200);
     expect(LAST_IMAGE_REQUEST.provider).toBe('qwen');
-    expect(LAST_IMAGE_REQUEST.model).toBe('qwen-image-test');
+    expect(LAST_IMAGE_REQUEST.model).toBe('qwen-image-3.0');
     expect(LAST_H3_IMAGE_URL).toBe('http://example.com/qwen-preview.png');
   });
 
