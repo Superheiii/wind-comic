@@ -115,6 +115,19 @@ function optionalProvider(id: string, label: string, kind: ProviderKind, key?: s
   return { id, label, kind, status: 'not_configured', detail: '未接入 (可选)' };
 }
 
+/** MetaSO H3 健康项只验证本地配置，绝不发起会产生费用的视频任务。 */
+function probeMetaSOH3(): ProviderHealth {
+  const base = { id: 'metaso-h3', label: 'MetaSO MiniMax-H3 (视频)', kind: 'video' as ProviderKind, baseUrl: API_CONFIG.metaso.baseURL };
+  if (isPlaceholder(API_CONFIG.metaso.apiKey)) return { ...base, status: 'not_configured', detail: '未设置 METASO_API_KEY' };
+  try {
+    const url = new URL(API_CONFIG.metaso.baseURL);
+    if (!/^https?:$/.test(url.protocol)) throw new Error('协议无效');
+    return { ...base, status: 'ok', detail: '已配置（仅校验本地配置，未提交视频任务）' };
+  } catch {
+    return { ...base, status: 'misconfigured', detail: 'METASO_BASE_URL 不是有效 HTTP(S) 地址' };
+  }
+}
+
 export async function GET(request: NextRequest) {
   // v12.218(安全止血):此端点暴露所有 provider 的 baseUrl(含内部网关域名)/余额/密钥状态,不该匿名。
   const _g = requireUser(request);
@@ -150,6 +163,7 @@ export async function GET(request: NextRequest) {
       key: API_CONFIG.minimax.apiKey,
       fetch: (url, init) => timedFetch(url, init),
     }),
+    probeMetaSOH3(),
     probeGateway('qingyuntop', 'qingyuntop 网关 (Vidu/聚合视频)', process.env.QINGYUNTOP_BASE_URL || 'https://api.qingyuntop.top', process.env.QINGYUNTOP_API_KEY),
     probeGateway('vectorengine', 'vectorengine 网关 (补全: TTS/MJ/Kling/图像)', veBase, veKey),
   ]);

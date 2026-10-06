@@ -27,6 +27,7 @@ interface PreviewResult {
   prompt: string;
   style: string;
   aspect: string;
+  videoProvider?: string;
   elapsedMs: number;
   warnings?: string[];
   rateLimit?: RateLimit;
@@ -48,6 +49,7 @@ export interface PreviewShotModalProps {
   idea: string;
   style: string;
   aspect: string;
+  videoProvider?: string;
   videoToo?: boolean;
   /**
    * 用户点 "用这个走全流程" → 父组件触发完整 ROLL
@@ -61,7 +63,7 @@ export interface PreviewShotModalProps {
 }
 
 export function PreviewShotModal({
-  idea, style, aspect, videoToo = true, onAccept, onCancel,
+  idea, style, aspect, videoProvider, videoToo = true, onAccept, onCancel,
 }: PreviewShotModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +95,7 @@ export function PreviewShotModal({
       const res = await fetch('/api/preview-shot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idea, style, aspect, videoToo: withVideo }),
+        body: JSON.stringify({ idea, style, aspect, videoProvider, videoToo: withVideo }),
       });
       const body = await res.json();
       if (res.status === 429) {

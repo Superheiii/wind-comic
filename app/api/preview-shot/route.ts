@@ -29,6 +29,7 @@ import { db } from '@/lib/db';
 import { getUserFromRequest } from '../auth/lib';
 import { MidjourneyService, hasMidjourney } from '@/services/midjourney.service';
 import { MinimaxService } from '@/services/minimax.service';
+import { MetaSOH3Service } from '@/services/metaso-h3.service';
 import { API_CONFIG } from '@/lib/config';
 import { checkPlan } from '@/lib/plan-gate';
 import {
@@ -70,6 +71,7 @@ export async function POST(request: NextRequest) {
   const aspectInput = typeof body?.aspect === 'string' ? body.aspect.trim() : '16:9';
   const aspect = ASPECT_TO_RATIO[aspectInput] || '16:9';
   const videoToo = body?.videoToo !== false; // 默认 true
+  const videoProvider = body?.videoProvider === 'metaso-h3' ? 'metaso-h3' : 'minimax';
 
   if (!rawIdea) return NextResponse.json({ error: '缺 idea' }, { status: 400 });
   if (rawIdea.length < 10) return NextResponse.json({ error: 'idea 至少 10 个字符' }, { status: 400 });
@@ -114,7 +116,7 @@ export async function POST(request: NextRequest) {
   // 故意保持 ≤ 200 字, 让上游 API 快速吃下不超 token
   const visualPrompt = buildPreviewVisualPrompt(cleanedIdea, style, aspect);
 
-  console.log(`[preview-shot] user=${userId} style=${style} aspect=${aspect} videoToo=${videoToo} prompt="${visualPrompt.slice(0, 80)}..."`);
+  console.log(`[preview-shot] user=${userId} style=${style} aspect=${aspect} videoProvider=${videoProvider} videoToo=${videoToo} prompt="${visualPrompt.slice(0, 80)}..."`);
 
   // v9.3.4: 预算护栏硬拦截 — 到月度硬上限则拦 (试拍粗估: 图 ~¥0.3, +视频段 ~¥1.5)
   const { assertBudget } = await import('@/lib/budget-enforce');
@@ -154,19 +156,25 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // ── Step 2 (optional): Minimax I2V 1 段 5s ──
+  // ── Step 2 (optional): explicit provider I2V 1 段 5s ──
   let videoUrl: string | undefined;
   if (videoToo) {
-    if (!API_CONFIG.minimax.apiKey) {
+    if (videoProvider === 'metaso-h3' && !new MetaSOH3Service().isConfigured()) {
+      warnings.push('MetaSO H3 未配置, 跳过视频生成 (只返图片)');
+    } else if (videoProvider === 'minimax' && !API_CONFIG.minimax.apiKey) {
       warnings.push('MINIMAX_API_KEY 未配置, 跳过视频生成 (只返图片)');
     } else {
       try {
         const motionPrompt = `${visualPrompt}\n\nCamera: subtle slow push-in, smooth ease-in-out. ` +
           `Maintain photographic realism, preserve original lighting and color palette of the input image. ` +
           `Avoid: morphing artifacts, face distortion, hand mutation.`;
-        const minimax = new MinimaxService();
-        videoUrl = await minimax.generateVideo(imageUrl, motionPrompt, { duration: 5 });
-        if (!videoUrl) throw new Error('Minimax 返回空 videoUrl');
+        if (videoProvider === 'metaso-h3') {
+          videoUrl = await new MetaSOH3Service().generateVideo(imageUrl, motionPrompt);
+          if (!videoUrl) throw new Error('MetaSO H3 返回空 videoUrl');
+        } else {
+          videoUrl = await new MinimaxService().generateVideo(imageUrl, motionPrompt, { duration: 5 });
+          if (!videoUrl) throw new Error('Minimax 返回空 videoUrl');
+        }
         console.log(`[preview-shot] video done: ${videoUrl.slice(0, 80)}`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

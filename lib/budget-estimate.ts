@@ -8,7 +8,7 @@
 
 /** 引擎视频秒单价(¥/秒;与 lib/config pricing 对齐,未知引擎取最贵档)。 */
 const VIDEO_CNY_PER_SEC: Record<string, number> = {
-  veo: 0.3, minimax: 0.15, kling: 0.2, keling: 0.2, vidu: 0.25, seedance: 0.2,
+  veo: 0.3, minimax: 0.15, 'metaso-h3': 0.15, metaso: 0.15, kling: 0.2, keling: 0.2, vidu: 0.25, seedance: 0.2,
 };
 const MAX_VIDEO_RATE = Math.max(...Object.values(VIDEO_CNY_PER_SEC));
 // v12.223 校准(🔴-6:旧估算对高清档低估 5-10 倍):4K 真机实测 ¥6/5s = ¥1.2/秒(v12.215),

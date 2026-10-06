@@ -14,6 +14,7 @@ import {
   EditResult, DirectorReview, CharacterDesignerResult, SceneDesignerResult, GateData, GateResult,
 } from '@/types/agents';
 import { MinimaxService } from './minimax.service';
+import { MetaSOH3Service } from './metaso-h3.service';
 import { VeoService, hasVeo } from './veo.service';
 import { VEO_SEGMENT_SEC } from '@/lib/veo-scene-extension';
 import { createTaskBudget } from '@/lib/task-budget';
@@ -146,7 +147,7 @@ type ProgressCallback = (type: string, data: any) => void;
 // ═══════════════════════════════════════════
 // v12.272:与 lib/engine-order.ts 的 VideoEngineName 保持同一集合 —— 两处此前各写各的,
 // 漏改任一处都会让新引擎「配置得上、永远派发不到」。
-type VideoEngine = 'veo' | 'minimax' | 'kling' | 'happyhorse';
+type VideoEngine = 'veo' | 'minimax' | 'kling' | 'happyhorse' | 'metaso-h3';
 
 interface EngineRouteResult {
   primary: VideoEngine;
@@ -308,6 +309,7 @@ export class HybridOrchestrator {
   private agents: Map<AgentRole, Agent>;
   private openai: OpenAI | null;
   private minimaxService: MinimaxService | null;
+  private metasoH3Service: MetaSOH3Service | null;
   private veoService: VeoService | null;
   /**
    * v12.413:单次出片任务的预算闸。与 budget-enforce(按用户按月)分工不同 ——
@@ -746,6 +748,7 @@ export class HybridOrchestrator {
     this.agents = new Map();
     this.openai = hasLLM ? new OpenAI({ apiKey: API_CONFIG.openai.apiKey, baseURL: API_CONFIG.openai.baseURL, timeout: 180_000, maxRetries: 1 }) : null;
     this.minimaxService = hasMinimax ? new MinimaxService() : null;
+    this.metasoH3Service = new MetaSOH3Service().isConfigured() ? new MetaSOH3Service() : null;
     this.veoService = hasVeo() ? new VeoService() : null;
     this.mjService = hasMidjourney() ? new MidjourneyService() : null;
     this.klingService = hasKling() ? new KlingService() : null;
@@ -760,7 +763,7 @@ export class HybridOrchestrator {
     const minimaxLabel = this.minimaxService
       ? (minimaxCaps.length > 0 ? minimaxCaps.join('+') : 'TTS-ONLY')
       : 'OFF';
-    console.log(`[Hybrid] LLM: ${this.openai ? 'Claude' : 'OFF'}, MJ: ${this.mjService ? 'ON' : 'OFF'}, Minimax: ${minimaxLabel}, Veo: ${this.veoService ? 'ON' : 'OFF'}, Kling: ${this.klingService ? 'ON' : 'OFF'}, HappyHorse: ${this.happyhorseService ? 'ON' : 'OFF'}, FalFlux: ${this.falFluxService ? 'ON' : 'OFF'}, ComfyUI: ${this.comfyuiService ? 'ON' : 'OFF'}`);
+    console.log(`[Hybrid] LLM: ${this.openai ? 'Claude' : 'OFF'}, MJ: ${this.mjService ? 'ON' : 'OFF'}, Minimax: ${minimaxLabel}, MetaSO-H3: ${this.metasoH3Service ? 'ON' : 'OFF'}, Veo: ${this.veoService ? 'ON' : 'OFF'}, Kling: ${this.klingService ? 'ON' : 'OFF'}, HappyHorse: ${this.happyhorseService ? 'ON' : 'OFF'}, FalFlux: ${this.falFluxService ? 'ON' : 'OFF'}, ComfyUI: ${this.comfyuiService ? 'ON' : 'OFF'}`);
 
     // v3.2 P1: 注册内置 image providers + 自动加载 IMAGE_PROVIDERS_DIR.
     // 异步 fire-and-forget — 不阻塞 orchestrator 创建.
@@ -3322,6 +3325,7 @@ ${shots.map((s, i) => {
       // ★ Veo 官方优先（vectorengine.ai 通道，实测稳定性最佳）
       if (this.veoService) availableEngines.push('veo');
       if (this.minimaxService?.isVideoAvailable()) availableEngines.push('minimax');
+      if (this.metasoH3Service) availableEngines.push('metaso-h3');
       if (this.klingService) availableEngines.push('kling');
       // v12.272:HappyHorse(阿里)—— 有 key 即登记;默认链序不含它,
       // 需 VIDEO_ENGINE_ORDER 显式列出或用户显式选择才会打头(不改变既有用户的出片结果)。
@@ -3362,7 +3366,7 @@ ${shots.map((s, i) => {
 
         // v12.8.1: 引擎兜底链(含软熔断)走抽出来的纯控制流 runVideoEngineChain —— 可单测坐实「跳过冷却引擎」。
         //   每个引擎的具体调用(minimax/veo/kling 各自参数)留在 attempt 回调;控制流(跳过/试/校验/熔断/下一个)在 helper。
-        const _engineLabel = (engine: string) => engine === 'veo' ? 'Veo 3.1' : engine === 'kling' ? '可灵 AI' : engine === 'happyhorse' ? 'HappyHorse 1.1(阿里)' : (hasCharRef ? 'Minimax(I2V+角色)' : hasFirstFrame ? 'Minimax I2V-01' : 'Minimax Hailuo-2.3');
+        const _engineLabel = (engine: string) => engine === 'veo' ? 'Veo 3.1' : engine === 'kling' ? '可灵 AI' : engine === 'happyhorse' ? 'HappyHorse 1.1(阿里)' : engine === 'metaso-h3' ? 'MetaSO MiniMax-H3' : (hasCharRef ? 'Minimax(I2V+角色)' : hasFirstFrame ? 'Minimax I2V-01' : 'Minimax Hailuo-2.3');
         const _chain = await runVideoEngineChain(
           engineOrder,
           async (engine) => {
@@ -3380,6 +3384,9 @@ ${shots.map((s, i) => {
                 referenceImages: mrBundle.referenceImages.length > 0 ? mrBundle.referenceImages : undefined,
                 s2vPrompt: minimaxS2vPrompt, // v12.9.1(#2):S2V 走去外观版,Hailuo 兜底仍用完整 enhancedPrompt
               });
+            } else if (engine === 'metaso-h3' && this.metasoH3Service) {
+              // MetaSO 仅支持公网首帧；服务层会明确拒绝本地/私网 URL，避免把不可访问路径提交出去。
+              return await this.metasoH3Service.generateVideo(firstFrameUrl || undefined, enhancedPrompt);
             } else if (engine === 'veo' && this.veoService) {
               // ★ v2.8: Veo 3.1 multi-reference — 把整个 bundle 拍平给 ingredient-to-video
               const veoRefs = flattenBundleToUrls(mrBundle, 4).filter((u) => u !== firstFrameUrl);

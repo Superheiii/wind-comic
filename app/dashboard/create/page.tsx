@@ -788,6 +788,7 @@ export default function DashboardCreatePage() {
           idea={idea}
           style={style}
           aspect={aspect}
+          videoProvider={videoProvider}
           videoToo={true}
           onAccept={(seed) => {
             setShowPreview(false);
@@ -1095,10 +1096,11 @@ export default function DashboardCreatePage() {
 
           {createMode === 'pro' && <div>
             <Eyebrow>Engine · 视频引擎</Eyebrow>
-            <div className="grid grid-cols-3 gap-2 mt-2">
+            <div className="grid grid-cols-2 xl:grid-cols-4 gap-2 mt-2">
               {[
                 { id: 'veo', label: 'Veo 3.1', sub: 'cinematic · slow' },
                 { id: 'minimax', label: 'Minimax', sub: 'balanced · fast' },
+                { id: 'metaso-h3', label: 'MetaSO H3', sub: 'MiniMax-H3 · I2V/T2V' },
                 { id: 'keling', label: '可灵 AI', sub: '官方API · 已接入' }, // v12.157:key 已接,别名在 engine-order 归一
               ].map((v) => (
                 <button

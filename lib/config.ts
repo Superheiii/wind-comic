@@ -47,6 +47,21 @@ export const API_CONFIG = {
     pricing: 0.15  // ¥/秒
   },
 
+  // MetaSO 第三方 MiniMax-H3。保留 `/api/minimax` 路径，服务层再拼 v2 路由。
+  metaso: {
+    get apiKey() { return process.env.METASO_API_KEY || ''; },
+    get baseURL() { return normalizeBaseURL(process.env.METASO_BASE_URL || 'https://metaso.cn/api/minimax'); },
+    get model() { return process.env.METASO_VIDEO_MODEL || 'MiniMax-H3'; },
+    get resolution() { return process.env.METASO_VIDEO_RESOLUTION || '768P'; },
+    get duration() {
+      const value = Number(process.env.METASO_VIDEO_DURATION || 5);
+      return Number.isFinite(value) && value > 0 ? value : 5;
+    },
+    get ratio() { return process.env.METASO_VIDEO_RATIO || '9:16'; },
+    get contextIrEnabled() { return process.env.METASO_CONTEXT_IR_ENABLED === 'true'; },
+    pricing: 0.15, // 仅用于预算预估；以 MetaSO 实际账单为准
+  },
+
   vidu: {
     apiKey: process.env.VIDU_API_KEY || '',
     // v12.461:Vidu 主机的**唯一**默认值,vidu.service 直接读这里。
